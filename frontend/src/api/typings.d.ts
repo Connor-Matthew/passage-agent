@@ -46,6 +46,7 @@ declare namespace API {
     topic?: string
     style?: string
     enabledImageMethods?: string[]
+    enableWebSearch?: boolean  // 第 11 期新增
   }
 
   type ArticleQueryRequest = {

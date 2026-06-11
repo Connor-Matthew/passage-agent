@@ -83,8 +83,8 @@
                 <a-checkbox-group v-model:value="selectedImageMethods" class="methods-group">
                   <a-checkbox value="PEXELS">Pexels</a-checkbox>
                   <a-tooltip :title="isVip ? '' : '仅限 VIP 会员'">
-                    <a-checkbox value="NANO_BANANA" :disabled="!isVip">
-                      Nano Banana
+                    <a-checkbox value="QWEN_IMAGE" :disabled="!isVip">
+                      Qwen Image
                       <CrownOutlined v-if="!isVip" class="vip-icon" />
                     </a-checkbox>
                   </a-tooltip>
@@ -103,6 +103,20 @@
                   <span>AI 生图和 SVG 图表为 VIP 专属功能，</span>
                   <RouterLink to="/vip" class="upgrade-link">立即升级</RouterLink>
                 </div>
+              </div>
+
+              <!-- 第 11 期：联网搜索开关 -->
+              <div class="web-search-section">
+                <div class="section-header">
+                  <span class="section-title">联网搜索</span>
+                  <span class="section-tip">（使用最新资料创作）</span>
+                </div>
+                <a-switch v-model:checked="enableWebSearch" />
+                <span class="web-search-label">{{ enableWebSearch ? '已启用' : '已关闭' }}</span>
+                <p class="web-search-hint">
+                  <BulbOutlined class="hint-icon" />
+                  开启后，AI 将搜索最新资料辅助创作，提升文章时效性和事实性
+                </p>
               </div>
 
               <a-button
@@ -355,11 +369,31 @@
           </div>
           <div v-if="isCreating" class="progress-tip">
             <InfoCircleOutlined />
-            <span>AI 正在努力创作中，请耐心等待...</span>
+            <span v-if="enableWebSearch">已启用联网搜索，正在搜索最新资料...</span>
+            <span v-else>AI 正在努力创作中，请耐心等待...</span>
           </div>
           <div v-else class="progress-tip waiting">
             <InfoCircleOutlined />
             <span>等待您的确认...</span>
+          </div>
+        </div>
+
+        <!-- 第 11 期：联网搜索状态（创作进行中显示） -->
+        <div v-if="enableWebSearch && (isCreating || currentPhase === 'TITLE_SELECTING' || currentPhase === 'OUTLINE_EDITING')" class="panel-section web-search-status">
+          <h4 class="panel-title">
+            <GlobalOutlined />
+            联网搜索
+          </h4>
+          <div class="web-search-info">
+            <span v-if="isCreating" class="search-badge searching">
+              <LoadingOutlined class="spin-icon" />
+              搜索中
+            </span>
+            <span v-else class="search-badge completed">
+              <CheckCircleOutlined />
+              已完成
+            </span>
+            <p class="search-hint">已参考最新资料辅助创作</p>
           </div>
         </div>
 
@@ -557,7 +591,8 @@ import {
   PictureOutlined,
   WarningOutlined,
   CrownOutlined,
-  FileTextOutlined
+  FileTextOutlined,
+  GlobalOutlined
 } from '@ant-design/icons-vue'
 import { createArticle, confirmTitle, confirmOutline } from '@/api/articleController'
 import { connectSSE, closeSSE, type SSEMessage } from '@/utils/sse'
@@ -603,6 +638,7 @@ const currentPhase = ref<string>('INPUT')  // INPUT, TITLE_SELECTING, OUTLINE_ED
 const topic = ref('')
 const selectedStyle = ref('')  // 选中的文章风格（空字符串表示默认）
 const selectedImageMethods = ref<string[]>([])  // 选中的配图方式（空数组表示全部）
+const enableWebSearch = ref(false)  // 第 11 期：是否启用联网搜索
 const isCreating = ref(false)
 const isCompleted = ref(false)
 const isStreaming = ref(false)
@@ -734,7 +770,8 @@ const startCreate = async () => {
     const res = await createArticle({
       topic: topic.value,
       style: selectedStyle.value || undefined,
-      enabledImageMethods: selectedImageMethods.value.length > 0 ? selectedImageMethods.value : undefined
+      enabledImageMethods: selectedImageMethods.value.length > 0 ? selectedImageMethods.value : undefined,
+      enableWebSearch: enableWebSearch.value  // 第 11 期新增
     })
     const newTaskId = res.data.data
     if (!newTaskId) {
@@ -973,6 +1010,7 @@ const resetCreate = () => {
   outlineRaw.value = ''
   confirmLoading.value = false
   realtimeLogs.value = []
+  enableWebSearch.value = false  // 第 11 期新增
   article.value = {
     mainTitle: '',
     subTitle: '',
@@ -1367,6 +1405,72 @@ onBeforeUnmount(() => {
       text-decoration: underline;
     }
   }
+}
+
+/* 第 11 期：联网搜索开关样式 */
+.web-search-section {
+  padding: 16px;
+  background: var(--color-background-secondary);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border-light);
+}
+
+.web-search-label {
+  margin-left: 10px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.web-search-hint {
+  margin: 10px 0 0;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  line-height: 1.5;
+
+  .hint-icon {
+    color: var(--color-primary);
+    margin-right: 4px;
+  }
+}
+
+.web-search-status {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.05) 0%, rgba(59, 130, 246, 0.02) 100%);
+  border-radius: var(--radius-lg);
+  padding: 16px !important;
+}
+
+.web-search-info {
+  text-align: center;
+}
+
+.search-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: var(--radius-full);
+  font-size: 13px;
+  font-weight: 600;
+
+  &.searching {
+    background: rgba(59, 130, 246, 0.1);
+    color: #3b82f6;
+    
+    .spin-icon {
+      animation: spin 1s linear infinite;
+    }
+  }
+
+  &.completed {
+    background: rgba(34, 197, 94, 0.1);
+    color: var(--color-primary);
+  }
+}
+
+.search-hint {
+  margin: 10px 0 0;
+  font-size: 11px;
+  color: var(--color-text-muted);
 }
 
 /* 创作进行中 */

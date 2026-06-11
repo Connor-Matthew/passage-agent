@@ -46,21 +46,25 @@ async def create_article(
         request.topic,
         current_user,
         request.style,  # 第 5 期新增
-        request.enabled_image_methods  # 第 5 期新增
+        request.enabled_image_methods,  # 第 5 期新增
+        request.enable_web_search,  # 第 11 期新增
     )
     
     # 异步执行阶段1：生成标题方案
+    # 没有await 后台不必等待这个任务，就可以直接返回后面的 task id
     asyncio.create_task(
+        
         article_async_service.execute_phase1(
             task_id,
             request.topic,
             request.style,
+            request.enable_web_search,  # 第 11 期新增
         )
     )
     
     return BaseResponse.success(data=task_id, message="任务创建成功")
 
-
+# sse连接
 @router.get("/progress/{task_id}")
 async def get_progress(
     task_id: str,
@@ -76,7 +80,7 @@ async def get_progress(
     
     # 校验权限（内部会检查任务是否存在以及用户是否有权限访问）
     service = ArticleService(db)
-    await service.get_article_detail(task_id, current_user)
+    await service.get_article_detail(task_id, current_user) # 如果不合格的话，会返回 ERROR，做校验用
     
     # 创建 SSE Emitter
     return sse_emitter_manager.create_emitter(task_id)

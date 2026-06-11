@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime
 from typing import Callable, List, Optional
@@ -24,6 +25,7 @@ from app.schemas.article import (
 from app.models.enums import SseMessageTypeEnum, ImageMethodEnum, ArticleStyleEnum
 from app.services.agent_log_service import AgentLogService
 from app.services.image_service_strategy import ImageServiceStrategy
+from app.services.tavily_search_service import tavily_search_service
 
 logger = logging.getLogger(__name__)
 
@@ -32,12 +34,12 @@ class ArticleAgentService:
     """文章智能体编排服务"""
     
     def __init__(self):
-        # 初始化 OpenAI 客户端（DashScope 兼容）
-        self.client = AsyncOpenAI(
-            api_key=settings.dashscope_api_key,
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
-        )
-        self.model = settings.dashscope_model
+        # 初始化 OpenAI 客户端（通用 OpenAI 兼容格式，第 10 期重构）
+        api_key = settings.openai_api_key or settings.dashscope_api_key
+        base_url = settings.openai_api_base or "https://api.openai.com/v1"
+        model = settings.openai_model or settings.dashscope_model
+        self.client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        self.model = model
         
         # 初始化策略模式（第 5 期改动）
         self.image_service_strategy = ImageServiceStrategy()
@@ -95,12 +97,17 @@ class ArticleAgentService:
         """智能体1：生成标题方案（3-5个）"""
         prompt = PromptConstant.AGENT1_TITLE_PROMPT.replace("{topic}", state.topic)
         prompt += self._get_style_prompt(state.style)  # 第 5 期新增：风格 Prompt
+        
+        # 第 11 期：注入 Web 搜索上下文
+        if state.enable_web_search and state.web_search_context:
+            search_context = tavily_search_service.build_search_context_prompt(state.web_search_context)
+            prompt += search_context
 
         async with self._agent_log_context(
             task_id=state.task_id,
             agent_name="agent1_generate_titles",
             prompt=prompt,
-            input_data={"topic": state.topic, "style": state.style},
+            input_data={"topic": state.topic, "style": state.style, "enableWebSearch": state.enable_web_search},
         ) as log_data:
             content = await self._call_llm(prompt)
             title_options_data = self._parse_json_list_response(content, "标题方案")
@@ -128,6 +135,11 @@ class ArticleAgentService:
             .replace("{descriptionSection}", description_section)
         )
         prompt += self._get_style_prompt(state.style)  # 第 5 期新增：风格 Prompt
+        
+        # 第 11 期：注入 Web 搜索上下文
+        if state.enable_web_search and state.web_search_context:
+            search_context = tavily_search_service.build_search_context_prompt(state.web_search_context)
+            prompt += search_context
 
         async with self._agent_log_context(
             task_id=state.task_id,
@@ -137,6 +149,7 @@ class ArticleAgentService:
                 "mainTitle": state.title.main_title if state.title else None,
                 "subTitle": state.title.sub_title if state.title else None,
                 "hasUserDescription": bool(state.user_description and state.user_description.strip()),
+                "enableWebSearch": state.enable_web_search,
             },
         ) as log_data:
             content = await self._call_llm_with_streaming(
@@ -165,6 +178,12 @@ class ArticleAgentService:
             .replace("{outline}", outline_text)
         )
         prompt += self._get_style_prompt(state.style)  # 第 5 期新增：风格 Prompt
+        
+        # 第 11 期：注入 Web 搜索上下文
+        search_context = ""
+        if state.enable_web_search and state.web_search_context:
+            search_context = tavily_search_service.build_search_context_prompt(state.web_search_context)
+            prompt += search_context
 
         async with self._agent_log_context(
             task_id=state.task_id,
@@ -174,11 +193,20 @@ class ArticleAgentService:
                 "mainTitle": state.title.main_title if state.title else None,
                 "subTitle": state.title.sub_title if state.title else None,
                 "outlineSections": len(state.outline.sections) if state.outline else 0,
+                "enableWebSearch": state.enable_web_search,
             },
         ) as log_data:
             content = await self._call_llm_with_streaming(
                 prompt, stream_handler, SseMessageTypeEnum.AGENT3_STREAMING
             )
+            
+            # 第 11 期：如果有搜索结果，在正文末尾追加参考资料
+            if state.enable_web_search and state.web_search_context:
+                results = state.web_search_context.get("results", [])
+                if results:
+                    references = self._build_references_section(results)
+                    content += references
+            
             state.content = content
             log_data["outputData"] = self._safe_json_dumps({"contentLength": len(content)})
             logger.info(f"智能体3：正文生成成功, length={len(content)}")
@@ -209,7 +237,7 @@ class ArticleAgentService:
             input_data={"enabledImageMethods": state.enabled_image_methods},
         ) as log_data:
             content = await self._call_llm(prompt)
-            agent4_data = self._parse_json_response(content, "配图需求")
+            agent4_data = self._parse_agent4_result_data(content, state.content)
             agent4_result = Agent4Result(**agent4_data)
 
             # 更新正文为包含占位符的版本
@@ -317,7 +345,7 @@ class ArticleAgentService:
         """调用 LLM（非流式）"""
         response = await self.client.chat.completions.create(
             model=self.model,
-            messages=[{"role": "user", "content": prompt}]
+            messages=[{"role": "user", "content": "注意：只输出 JSON 格式，不要包含任何思考过程、解释或 markdown 标记。" + prompt}]
         )
         return response.choices[0].message.content
     
@@ -347,30 +375,128 @@ class ArticleAgentService:
     def _parse_json_response(self, content: str, name: str) -> dict:
         """解析 JSON 响应"""
         try:
-            result = json.loads(content)
+            result = self._extract_json_value(content, dict)
             if not isinstance(result, dict):
                 raise ValueError("响应不是 JSON 对象")
             return result
-        except json.JSONDecodeError as e:
-            logger.error(f"{name}解析失败, content={content}, error={e}")
-            raise RuntimeError(f"{name}解析失败")
-        except ValueError as e:
+        except (json.JSONDecodeError, ValueError) as e:
             logger.error(f"{name}解析失败, content={content}, error={e}")
             raise RuntimeError(f"{name}解析失败")
 
     def _parse_json_list_response(self, content: str, name: str) -> list:
         """解析 JSON 数组响应"""
         try:
-            result = json.loads(content)
+            result = self._extract_json_value(content, list)
             if not isinstance(result, list):
                 raise ValueError("响应不是 JSON 数组")
             return result
-        except json.JSONDecodeError as e:
+        except (json.JSONDecodeError, ValueError) as e:
             logger.error(f"{name}解析失败, content={content}, error={e}")
             raise RuntimeError(f"{name}解析失败")
-        except ValueError as e:
-            logger.error(f"{name}解析失败, content={content}, error={e}")
-            raise RuntimeError(f"{name}解析失败")
+
+    def _extract_json_value(self, content: str, expected_type: type | tuple[type, ...] | None = None):
+        """从 LLM 响应中提取顶层 JSON，兼容思考标签、markdown fence 和前后说明文字。"""
+        cleaned = self._strip_thinking_tags(content)
+        if not cleaned:
+            raise ValueError("响应为空")
+
+        candidates = [match.strip() for match in re.findall(r"```(?:json)?\s*([\s\S]*?)```", cleaned, flags=re.IGNORECASE)]
+        candidates.append(cleaned.strip())
+
+        decoder = json.JSONDecoder()
+        first_type_mismatch = None
+        for candidate in candidates:
+            if not candidate:
+                continue
+            try:
+                result = json.loads(candidate)
+                if expected_type is None or isinstance(result, expected_type):
+                    return result
+                if first_type_mismatch is None:
+                    first_type_mismatch = result
+                continue
+            except json.JSONDecodeError:
+                pass
+
+            for index, char in enumerate(candidate):
+                if char not in "[{" or self._is_nested_json_candidate(candidate, index):
+                    continue
+                try:
+                    result, end = decoder.raw_decode(candidate[index:])
+                except json.JSONDecodeError:
+                    continue
+                if self._has_nested_json_trailer(candidate[index + end:]):
+                    continue
+                if expected_type is None or isinstance(result, expected_type):
+                    return result
+                if first_type_mismatch is None:
+                    first_type_mismatch = result
+
+        if first_type_mismatch is not None:
+            raise ValueError(f"响应不是期望的 JSON 类型: {type(first_type_mismatch).__name__}")
+        raise ValueError("未找到有效 JSON")
+
+    @staticmethod
+    def _is_nested_json_candidate(content: str, index: int) -> bool:
+        """判断当前位置是否是数组/对象内部的嵌套 JSON 起点。"""
+        prefix = content[:index].rstrip()
+        return bool(prefix) and prefix[-1] in "[{,:\""
+
+    @staticmethod
+    def _has_nested_json_trailer(trailer: str) -> bool:
+        """判断 raw_decode 后的剩余内容是否说明当前值只是外层 JSON 的内部片段。"""
+        stripped = trailer.lstrip()
+        return bool(stripped) and stripped[0] in ",]}"
+
+    def _parse_agent4_result_data(self, content: str, original_content: Optional[str]) -> dict:
+        """解析智能体4结果，兼容模型误返回 imageRequirements 数组/单项对象。"""
+        try:
+            data = self._extract_json_value(content, (dict, list))
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.error("配图需求解析失败, content=%s, error=%s", content, e)
+            raise RuntimeError("配图需求解析失败")
+
+        if isinstance(data, list):
+            logger.warning("配图需求返回了数组，已自动补齐 contentWithPlaceholders")
+            return {
+                "contentWithPlaceholders": self._insert_missing_placeholders(original_content or "", data),
+                "imageRequirements": data,
+            }
+
+        if "contentWithPlaceholders" in data and "imageRequirements" in data:
+            return data
+
+        if self._looks_like_image_requirement(data):
+            logger.warning("配图需求返回了单个需求对象，已自动补齐 contentWithPlaceholders")
+            return {
+                "contentWithPlaceholders": self._insert_missing_placeholders(original_content or "", [data]),
+                "imageRequirements": [data],
+            }
+
+        return data
+
+    @staticmethod
+    def _looks_like_image_requirement(data: dict) -> bool:
+        """判断对象是否像单个 ImageRequirement。"""
+        return {"position", "type", "imageSource", "placeholderId"}.issubset(data.keys())
+
+    def _insert_missing_placeholders(self, content: str, requirements: list) -> str:
+        """当模型只返回配图需求时，尽量把缺失的占位符补回正文。"""
+        result = content or ""
+        for requirement in requirements:
+            if not isinstance(requirement, dict):
+                continue
+            placeholder = self._normalize_placeholder_token(requirement.get("placeholderId"))
+            if not placeholder or placeholder in result:
+                continue
+
+            section_title = (requirement.get("sectionTitle") or "").strip()
+            heading_pattern = re.compile(rf"^(##+\s+{re.escape(section_title)}\s*)$", re.MULTILINE) if section_title else None
+            if heading_pattern and heading_pattern.search(result):
+                result = heading_pattern.sub(rf"\1\n\n{placeholder}", result, count=1)
+            else:
+                result = f"{result.rstrip()}\n\n{placeholder}\n"
+        return result
     
     def _build_image_result(
         self,
@@ -431,7 +557,7 @@ class ArticleAgentService:
     def _get_all_methods_description(self) -> str:
         """获取所有配图方式的完整描述"""
         return """   - PEXELS: 适合真实场景、产品照片、人物照片、自然风景等写实图片
-   - NANO_BANANA: 适合创意插画、信息图表、需要文字渲染、抽象概念、艺术风格等 AI 生成图片
+   - QWEN_IMAGE: 适合创意插画、信息图表、需要中文文字渲染、抽象概念、艺术风格等 AI 生成图片
    - MERMAID: 适合流程图、架构图、时序图、关系图、甘特图等结构化图表
    - ICONIFY: 适合图标、符号、小型装饰性图标（如：箭头、勾选、星星、心形等）
    - EMOJI_PACK: 适合表情包、搞笑图片、轻松幽默的配图
@@ -442,6 +568,7 @@ class ArticleAgentService:
         descriptions = {
             ImageMethodEnum.PEXELS: "适合真实场景、产品照片、人物照片、自然风景等写实图片",
             ImageMethodEnum.NANO_BANANA: "适合创意插画、信息图表、需要文字渲染、抽象概念、艺术风格等 AI 生成图片",
+            ImageMethodEnum.QWEN_IMAGE: "适合创意插画、信息图表、需要中文文字渲染、抽象概念、艺术风格等 AI 生成图片",
             ImageMethodEnum.MERMAID: "适合流程图、架构图、时序图、关系图、甘特图等结构化图表",
             ImageMethodEnum.ICONIFY: "适合图标、符号、小型装饰性图标（如：箭头、勾选、星星、心形等）",
             ImageMethodEnum.EMOJI_PACK: "适合表情包、搞笑图片、轻松幽默的配图",
@@ -456,7 +583,7 @@ class ArticleAgentService:
         """构建配图方式的详细使用指南"""
         # 如果没有限制，返回所有方式的使用指南
         methods_to_include = enabled_methods if enabled_methods else [
-            "PEXELS", "NANO_BANANA", "MERMAID", "ICONIFY", "EMOJI_PACK", "SVG_DIAGRAM"
+            "PEXELS", "QWEN_IMAGE", "MERMAID", "ICONIFY", "EMOJI_PACK", "SVG_DIAGRAM"
         ]
 
         guides = []
@@ -471,7 +598,8 @@ class ArticleAgentService:
         """获取单个配图方式的详细使用指南"""
         guides = {
             "PEXELS": "- PEXELS: 提供英文搜索关键词(keywords)，要准确、具体。prompt 留空。",
-            "NANO_BANANA": "- NANO_BANANA: 提供详细的英文生图提示词(prompt)，描述场景、风格、细节。keywords 留空。",
+            "NANO_BANANA": "- NANO_BANANA: 已停用，不要选择。",
+            "QWEN_IMAGE": "- QWEN_IMAGE: 提供详细的中文生图提示词(prompt)，描述主体、场景、风格、构图、光影、文字内容和细节。keywords 留空。",
             "MERMAID": "- MERMAID: 在 prompt 字段生成完整的 Mermaid 代码（如流程图、架构图）。keywords 留空。",
             "ICONIFY": "- ICONIFY: 提供英文图标关键词(keywords)，如：check、arrow、star、heart。prompt 留空。",
             "EMOJI_PACK": "- EMOJI_PACK: 提供中文或英文关键词(keywords)描述表情内容。prompt 留空。系统会自动添加'表情包'搜索。",
@@ -669,5 +797,71 @@ class ArticleAgentService:
             icon_four = "{{" + icon_two + "}}"
             content = content.replace(image_four, image_two).replace(icon_four, icon_two)
         return content
+    
+    async def generate_search_queries(self, topic: str, style: Optional[str] = None) -> List[dict]:
+        """
+        生成搜索查询（第 11 期新增）
+        
+        使用 LLM 将选题转换为事实型的搜索 query。
+        """
+        style_text = style or "默认风格"
+        prompt = PromptConstant.SEARCH_QUERY_PLANNER_PROMPT.replace("{topic}", topic).replace("{style}", style_text)
+        
+        async with self._agent_log_context(
+            task_id=None,
+            agent_name="search_query_planner",
+            prompt=prompt,
+            input_data={"topic": topic, "style": style},
+        ) as log_data:
+            content = await self._call_llm(prompt)
+            try:
+                data = self._extract_json_value(content, dict)
+                queries = data.get("queries", [])
+                log_data["outputData"] = self._safe_json_dumps({"queryCount": len(queries)})
+                logger.info("Search Query Planner 生成查询成功, count=%d", len(queries))
+                return queries
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.error("Search Query Planner 解析失败, content=%s, error=%s", content, e)
+                return []
+    
+    @staticmethod
+    def _strip_thinking_tags(content: str) -> str:
+        """移除思维链标签（MiniMax 等推理模型输出）"""
+        if not content:
+            return ""
+
+        # 移除完整的 <think>...</think> 思考块。
+        cleaned = re.sub(
+            r"<think\b[^>]*>.*?</think>\s*",
+            "",
+            content,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        # 兼容残留的孤立关闭标签。
+        cleaned = re.sub(r"</think>\s*", "", cleaned, flags=re.IGNORECASE)
+        # 兼容没有关闭标签的思考输出：保留第一个 JSON/code fence 起始点之后的内容。
+        if re.search(r"<think\b", cleaned, flags=re.IGNORECASE):
+            cleaned = re.sub(r"<think\b[^>]*>.*?(?=```|[\[{])", "", cleaned, flags=re.IGNORECASE | re.DOTALL)
+
+        return cleaned.strip()
+    
+    def _build_references_section(self, results: List[dict]) -> str:
+        """
+        构建参考资料章节（第 11 期新增）
+        """
+        if not results:
+            return ""
+        
+        references = []
+        for i, result in enumerate(results[:5], 1):  # 最多显示 5 个来源
+            title = result.get("title", "")
+            url = result.get("url", "")
+            if title and url:
+                references.append(f"[{i}] {title} - {url}")
+        
+        if not references:
+            return ""
+        
+        return PromptConstant.REFERENCE_SECTION_PROMPT.replace("{references}", "\n".join(references))
     
     # endregion

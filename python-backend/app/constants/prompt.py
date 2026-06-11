@@ -110,13 +110,13 @@ class PromptConstant:
    - 配图占位符可以放在任意合适位置（章节标题后、段落之间、列表项中、文字行内等）
 4. **只能从上述可用的配图方式中选择**, 为每个配图选择最合适的图片来源(imageSource):
    - PEXELS: 适合真实场景、产品照片、人物照片、自然风景等写实图片
-   - NANO_BANANA: 适合创意插画、信息图表、需要文字渲染、抽象概念、艺术风格等 AI 生成图片
+   - QWEN_IMAGE: 适合创意插画、信息图表、需要中文文字渲染、抽象概念、艺术风格等 AI 生成图片
    - MERMAID: 适合流程图、架构图、时序图、关系图、甘特图等结构化图表
    - ICONIFY: 适合图标、符号、小型装饰性图标（如：箭头、勾选、星星、心形等）
    - EMOJI_PACK: 适合表情包、搞笑图片、轻松幽默的配图
    - SVG_DIAGRAM: 适合概念示意图、思维导图样式、逻辑关系展示（不涉及精确数据）
 5. 对于 PEXELS 来源: 提供英文搜索关键词(keywords),要准确、具体
-6. 对于 NANO_BANANA 来源: 提供详细的英文生图提示词(prompt),描述场景、风格、细节
+6. 对于 QWEN_IMAGE 来源: 提供详细的中文生图提示词(prompt),描述主体、场景、风格、构图、光影、文字内容和细节
 7. 对于 MERMAID 来源:
    - 分析文章内容，识别需要流程图的位置（如：工作流程、系统架构、数据流向等）
    - 在 prompt 字段生成完整的 Mermaid 代码
@@ -147,9 +147,9 @@ class PromptConstant:
       "position": 1,
       "type": "cover",
       "sectionTitle": "",
-      "imageSource": "NANO_BANANA",
+      "imageSource": "QWEN_IMAGE",
       "keywords": "",
-      "prompt": "A modern minimalist illustration of AI technology concept, featuring abstract neural network patterns with blue and purple gradient colors, clean design suitable for article cover, 16:9 aspect ratio",
+      "prompt": "现代极简 AI 科技主题封面插画，抽象神经网络纹理，蓝紫渐变配色，画面干净高级，适合文章封面，16:9 构图",
       "placeholderId": ""
     }},
     {{
@@ -287,3 +287,49 @@ class PromptConstant:
   ]
 }}
 """
+
+    # 第 11 期：Search Query Planner Prompt（生成搜索查询）
+    SEARCH_QUERY_PLANNER_PROMPT = """你是一位专业的研究助手,擅长将文章选题转换成精准的搜索查询。
+
+文章选题：{topic}
+文章风格：{style}
+
+任务：
+根据上述选题，生成 3-5 个事实型的搜索查询，用于搜索最新资料。
+
+要求：
+1. 搜索查询应该是面向事实、数据、案例和权威观点的表述
+2. 避免生成爆款标题式、情绪化、悬念式的搜索词
+3. 优先使用英文搜索（科技、商业、国际趋势类选题建议英文）
+4. 每个查询应能搜到权威资料、报告、案例和数据
+5. 查询类型应覆盖：
+   - background：背景、趋势、定义
+   - data：数据、报告、统计
+   - case：案例、公司实践、真实事件
+   - viewpoint：专家观点、争议或不同立场
+
+请直接返回 JSON 格式，不要有其他内容：
+{{
+  "queries": [
+    {{
+      "type": "background",
+      "query": "搜索查询1"
+    }},
+    {{
+      "type": "data",
+      "query": "搜索查询2"
+    }}
+  ]
+}}
+"""
+
+    # 第 11 期：参考资料模板（用于正文末尾）
+    REFERENCE_SECTION_PROMPT = """
+
+## 参考资料
+
+以下是在创作过程中参考的来源：
+{references}
+
+---
+*本文档内容参考了上述来源的最新资料*"""

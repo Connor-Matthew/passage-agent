@@ -1,5 +1,6 @@
 """Nano Banana (Gemini 原生图片生成) 服务（第 5 期新增）"""
 
+import base64
 import logging
 from typing import Optional
 from google import genai
@@ -22,6 +23,7 @@ class NanoBananaService(ImageSearchService):
         self.model = settings.nano_banana_model
         self.aspect_ratio = settings.nano_banana_aspect_ratio
         self.image_size = settings.nano_banana_image_size
+        self.output_mime_type = settings.nano_banana_output_mime_type
         # 初始化 Gemini 客户端
         self.client = genai.Client(api_key=self.api_key)
     
@@ -45,46 +47,41 @@ class NanoBananaService(ImageSearchService):
             ImageData 包含图片字节数据，生成失败返回 None
         """
         try:
-            # 构建图片配置
-            image_config_params = {"aspect_ratio": self.aspect_ratio}
-            
-            # Gemini 3 Pro Image 支持更高分辨率
-            if self.model and "gemini-3-pro" in self.model:
-                image_config_params["image_size"] = self.image_size
-            
-            # 使用 types.ImageConfig 构建配置对象
-            image_config = types.ImageConfig(**image_config_params)
-            
-            # 构建生成配置
-            config = types.GenerateContentConfig(
-                response_modalities=["TEXT", "IMAGE"],
-                image_config=image_config
-            )
-            
             logger.info(f"Nano Banana 开始生成图片, model={self.model}, prompt={prompt}")
             
-            # 调用 Gemini API 生成图片
+            # Gemini Flash Image / Nano Banana 使用 generate_content，并从 inline_data 读取图片。
+            # 官方示例也是 client.models.generate_content(...), response.parts[*].inline_data。
             response = self.client.models.generate_content(
-                model=self.model or "gemini-2.5-flash-image",
-                contents=prompt,
-                config=config
+                model=self.model or "gemini-3.1-flash-image",
+                contents=[prompt],
+                config=types.GenerateContentConfig(
+                    response_modalities=["TEXT", "IMAGE"],
+                ),
             )
             
-            # 从响应中提取图片数据
-            if response.candidates and response.candidates[0].content.parts:
-                for part in response.candidates[0].content.parts:
-                    if part.inline_data:
-                        image_bytes = part.inline_data.data
-                        mime_type = part.inline_data.mime_type or "image/png"
-                        
-                        logger.info(
-                            f"Nano Banana 图片生成成功, "
-                            f"size={len(image_bytes)} bytes, mimeType={mime_type}"
-                        )
-                        
-                        return ImageData.from_bytes(image_bytes, mime_type)
+            text_parts = []
+            for part in response.parts or []:
+                if part.text:
+                    text_parts.append(part.text)
+                    continue
+                
+                if part.inline_data and part.inline_data.data:
+                    image_bytes = part.inline_data.data
+                    if isinstance(image_bytes, str):
+                        image_bytes = base64.b64decode(image_bytes)
+                    mime_type = part.inline_data.mime_type or self.output_mime_type or "image/png"
+                    
+                    logger.info(
+                        f"Nano Banana 图片生成成功, "
+                        f"size={len(image_bytes)} bytes, mimeType={mime_type}"
+                    )
+                    
+                    return ImageData.from_bytes(image_bytes, mime_type)
             
-            logger.error("Nano Banana 响应中未找到图片数据")
+            if text_parts:
+                logger.error(f"Nano Banana 响应中只有文本未找到图片数据: {' | '.join(text_parts)}")
+            else:
+                logger.error("Nano Banana 响应中未找到图片数据")
             return None
         except Exception as e:
             logger.error(f"Nano Banana 生成图片异常: {e}")

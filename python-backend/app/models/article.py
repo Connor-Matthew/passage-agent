@@ -39,3 +39,6 @@ class Article(Base):
     completed_time = Column("completedTime", DateTime, nullable=True, comment="完成时间")
     update_time = Column("updateTime", DateTime, nullable=False, default=func.now(), onupdate=func.now(), comment="更新时间")
     is_delete = Column("isDelete", SmallInteger, nullable=False, default=0, comment="是否删除")
+    # 第 11 期：Web 搜索字段
+    enable_web_search = Column("enableWebSearch", SmallInteger, nullable=False, default=0, comment="是否启用联网搜索")
+    web_search_context = Column("webSearchContext", Text, nullable=True, comment="联网搜索上下文（JSON格式）")

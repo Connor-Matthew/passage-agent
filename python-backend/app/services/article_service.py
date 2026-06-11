@@ -39,6 +39,7 @@ class ArticleService:
         ]
         self._vip_only_image_methods = {
             ImageMethodEnum.NANO_BANANA.value,
+            ImageMethodEnum.QWEN_IMAGE.value,
             ImageMethodEnum.SVG_DIAGRAM.value,
         }
 
@@ -48,6 +49,7 @@ class ArticleService:
         login_user: LoginUserVO,
         style: Optional[str] = None,
         enabled_image_methods: Optional[List[str]] = None,
+        enable_web_search: bool = False,  # 第 11 期新增
     ) -> str:
         """创建文章任务"""
         final_image_methods = self._process_image_methods(enabled_image_methods, login_user)
@@ -57,10 +59,10 @@ class ArticleService:
         now = datetime.now()
         query = """
             INSERT INTO article (
-                taskId, userId, topic, style, enabledImageMethods, status, phase, createTime
+                taskId, userId, topic, style, enabledImageMethods, status, phase, createTime, enableWebSearch
             )
             VALUES (
-                :taskId, :userId, :topic, :style, :enabledImageMethods, :status, :phase, :createTime
+                :taskId, :userId, :topic, :style, :enabledImageMethods, :status, :phase, :createTime, :enableWebSearch
             )
         """
         await self.db.execute(
@@ -76,9 +78,11 @@ class ArticleService:
                 "status": ArticleStatusEnum.PENDING.value,
                 "phase": ArticlePhaseEnum.PENDING.value,
                 "createTime": now,
+                "enableWebSearch": 1 if enable_web_search else 0,
             },
         )
-        logger.info("文章任务创建成功, taskId=%s, userId=%s", task_id, login_user.id)
+        logger.info("文章任务创建成功, taskId=%s, userId=%s, enableWebSearch=%s", 
+                    task_id, login_user.id, enable_web_search)
         return task_id
 
     async def create_article_task_with_quota_check(
@@ -87,6 +91,7 @@ class ArticleService:
         login_user: LoginUserVO,
         style: Optional[str] = None,
         enabled_image_methods: Optional[List[str]] = None,
+        enable_web_search: bool = False,  # 第 11 期新增
     ) -> str:
         """在同一事务中完成配额扣减和任务创建"""
         if self._is_vip_or_admin(login_user):
@@ -95,6 +100,7 @@ class ArticleService:
                 login_user=login_user,
                 style=style,
                 enabled_image_methods=enabled_image_methods,
+                enable_web_search=enable_web_search,
             )
 
         async with self.db.transaction():
@@ -124,6 +130,7 @@ class ArticleService:
                 login_user=login_user,
                 style=style,
                 enabled_image_methods=enabled_image_methods,
+                enable_web_search=enable_web_search,
             )
 
     async def get_by_task_id(self, task_id: str):
@@ -375,6 +382,17 @@ class ArticleService:
         )
         return modified_outline
 
+    async def save_web_search_context(self, task_id: str, web_search_context: dict):
+        """保存 Web 搜索上下文（第 11 期新增）"""
+        await self.db.execute(
+            query="UPDATE article SET webSearchContext = :webSearchContext WHERE taskId = :taskId",
+            values={
+                "taskId": task_id,
+                "webSearchContext": json.dumps(web_search_context, ensure_ascii=False),
+            },
+        )
+        logger.info("Web 搜索上下文已保存, taskId=%s", task_id)
+
     async def save_article_content(self, task_id: str, state: ArticleState):
         """保存文章内容"""
         cover_image = None
@@ -477,4 +495,7 @@ class ArticleService:
             createTime=article_dict["createTime"].isoformat(),
             completedTime=article_dict["completedTime"].isoformat() if article_dict.get("completedTime") else None,
             updateTime=article_dict["updateTime"].isoformat(),
+            # 第 11 期新增
+            enableWebSearch=bool(article_dict.get("enableWebSearch")) if article_dict.get("enableWebSearch") is not None else None,
+            webSearchContext=article_dict.get("webSearchContext"),
         )

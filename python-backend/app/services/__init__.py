@@ -7,6 +7,7 @@ from app.services.article_async_service import article_async_service
 from app.services.pexels_service import PexelsService
 from app.services.cos_service import CosService
 from app.services.nano_banana_service import NanoBananaService
+from app.services.qwen_image_service import QwenImageService
 from app.services.mermaid_service import MermaidService
 from app.services.iconify_service import IconifyService
 from app.services.emoji_pack_service import EmojiPackService
@@ -25,6 +26,7 @@ __all__ = [
     "PexelsService",
     "CosService",
     "NanoBananaService",
+    "QwenImageService",
     "MermaidService",
     "IconifyService",
     "EmojiPackService",
