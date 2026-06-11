@@ -3,7 +3,7 @@
 import logging
 import asyncio
 from typing import Dict
-from fastapi.responses import StreamingResponse
+from sse_starlette.sse import EventSourceResponse
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +15,7 @@ class SseEmitterManager:
         # 存储所有的队列
         self._queues: Dict[str, asyncio.Queue] = {}
     
-    def create_emitter(self, task_id: str) -> StreamingResponse:
+    def create_emitter(self, task_id: str) -> EventSourceResponse:
         """
         创建 SSE Emitter发射器
         
@@ -23,7 +23,7 @@ class SseEmitterManager:
             task_id: 任务ID
             
         Returns:
-            StreamingResponse
+            EventSourceResponse
         """
         # 创建队列
         queue = asyncio.Queue()
@@ -42,10 +42,11 @@ class SseEmitterManager:
                     if message == "__COMPLETE__":
                         break
                     
-                    # 格式化为 SSE 格式
-                    yield f"data: {message}\n\n"
+                    # 使用 sse-starlette 格式化为 SSE 消息
+                    yield {"data": message}
             except asyncio.CancelledError:
                 logger.info(f"SSE 连接被取消, taskId={task_id}")
+                raise
             except Exception as e:
                 logger.error(f"SSE 连接错误, taskId={task_id}, error={e}")
             finally:
@@ -54,9 +55,10 @@ class SseEmitterManager:
                     del self._queues[task_id]
                 logger.info(f"SSE 连接已关闭, taskId={task_id}")
         
-        return StreamingResponse(
+        return EventSourceResponse(
             event_generator(),
-            media_type="text/event-stream",
+            ping=15,
+            send_timeout=30,
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
