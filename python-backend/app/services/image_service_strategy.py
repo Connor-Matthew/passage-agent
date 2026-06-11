@@ -6,7 +6,7 @@ from typing import Dict, List, Optional
 from app.models.enums import ImageMethodEnum
 from app.services.image_search_service import ImageSearchService
 from app.services.pexels_service import PexelsService
-from app.services.nano_banana_service import NanoBananaService
+from app.services.qwen_image_service import QwenImageService
 from app.services.mermaid_service import MermaidService
 from app.services.iconify_service import IconifyService
 from app.services.emoji_pack_service import EmojiPackService
@@ -48,7 +48,7 @@ class ImageServiceStrategy:
         """注册所有图片服务"""
         services = [
             PexelsService(),
-            NanoBananaService(),
+            QwenImageService(),
             MermaidService(),
             IconifyService(),
             EmojiPackService(),
@@ -137,6 +137,7 @@ class ImageServiceStrategy:
         folder_map = {
             ImageMethodEnum.PEXELS: "pexels",
             ImageMethodEnum.NANO_BANANA: "nano-banana",
+            ImageMethodEnum.QWEN_IMAGE: "qwen-image",
             ImageMethodEnum.MERMAID: "mermaid",
             ImageMethodEnum.ICONIFY: "iconify",
             ImageMethodEnum.EMOJI_PACK: "emoji-pack",

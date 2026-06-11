@@ -36,7 +36,7 @@ INSERT INTO user (id, userAccount, userPassword, userName, userAvatar, userProfi
 (2, 'user', '10670d38ec32fa8102be6a37f8cb52bf', '普通用户', NULL, '我是一个普通用户', 'user'),
 (3, 'test', '10670d38ec32fa8102be6a37f8cb52bf', '测试账号', NULL, '这是一个测试账号', 'user');
 
--- 文章表（基础字段，style/phase/titleOptions/userDescription/enabledImageMethods 由增量脚本添加）
+-- 文章表（基础字段，style/phase/titleOptions/userDescription/enabledImageMethods 由增量脚本添加，enableWebSearch/webSearchContext 由第 11 期增量脚本添加）
 create table if not exists article
 (
     id              bigint auto_increment comment 'id' primary key,
@@ -56,6 +56,8 @@ create table if not exists article
     completedTime   datetime                           null comment '完成时间',
     updateTime      datetime    default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '更新时间',
     isDelete        tinyint     default 0              not null comment '是否删除',
+    enableWebSearch tinyint     default 0              not null comment '是否启用联网搜索（第 11 期新增）',
+    webSearchContext text                              null comment '联网搜索上下文（JSON格式，第 11 期新增）',
     UNIQUE KEY uk_taskId (taskId),
     INDEX idx_userId (userId),
     INDEX idx_status (status),

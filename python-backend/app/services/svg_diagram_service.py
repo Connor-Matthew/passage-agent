@@ -18,12 +18,12 @@ class SvgDiagramService(ImageSearchService):
     """SVG 概念示意图生成服务"""
     
     def __init__(self):
-        # 使用 DashScope
-        self.client = AsyncOpenAI(
-            api_key=settings.dashscope_api_key,
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
-        )
-        self.model = settings.dashscope_model
+        # 初始化 OpenAI 客户端（通用 OpenAI 兼容格式，第 10 期重构）
+        api_key = settings.openai_api_key or settings.dashscope_api_key
+        base_url = settings.openai_api_base or "https://api.openai.com/v1"
+        model = settings.openai_model or settings.dashscope_model
+        self.client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        self.model = model
         self.default_width = settings.svg_diagram_default_width
         self.default_height = settings.svg_diagram_default_height
     

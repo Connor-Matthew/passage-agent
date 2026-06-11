@@ -58,6 +58,7 @@ class ImageMethodEnum(str, Enum):
     
     PEXELS = "PEXELS"
     NANO_BANANA = "NANO_BANANA"
+    QWEN_IMAGE = "QWEN_IMAGE"
     MERMAID = "MERMAID"
     ICONIFY = "ICONIFY"
     EMOJI_PACK = "EMOJI_PACK"
@@ -68,6 +69,7 @@ class ImageMethodEnum(str, Enum):
         """是否为 AI 生图方式"""
         return self in [
             ImageMethodEnum.NANO_BANANA,
+            ImageMethodEnum.QWEN_IMAGE,
             ImageMethodEnum.MERMAID,
             ImageMethodEnum.SVG_DIAGRAM
         ]
@@ -84,7 +86,7 @@ class ImageMethodEnum(str, Enum):
     @classmethod
     def get_default_ai_method(cls):
         """获取默认的 AI 生图方式"""
-        return cls.NANO_BANANA
+        return cls.QWEN_IMAGE
     
     @classmethod
     def get_fallback_method(cls):

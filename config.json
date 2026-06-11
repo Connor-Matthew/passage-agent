@@ -1,0 +1,18 @@
+{
+  "id": "ws_c209b422",
+  "name": "passage-agent",
+  "slug": "passage-agent",
+  "defaults": {
+    "permissionMode": "safe",
+    "cyclablePermissionModes": [
+      "safe",
+      "allow-all"
+    ],
+    "enabledSourceSlugs": []
+  },
+  "localMcpServers": {
+    "enabled": true
+  },
+  "createdAt": 1780331568529,
+  "updatedAt": 1780331568529
+}

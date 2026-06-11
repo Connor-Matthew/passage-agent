@@ -17,7 +17,7 @@ class SseEmitterManager:
     
     def create_emitter(self, task_id: str) -> StreamingResponse:
         """
-        创建 SSE Emitter
+        创建 SSE Emitter发射器
         
         Args:
             task_id: 任务ID

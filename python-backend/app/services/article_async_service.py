@@ -22,9 +22,11 @@ class ArticleAsyncService:
         task_id: str,
         topic: str,
         style: Optional[str] = None,
+        enable_web_search: bool = False,  # 第 11 期新增
     ):
         """阶段1：异步生成标题方案"""
-        logger.info("阶段1异步任务开始, taskId=%s, topic=%s, style=%s", task_id, topic, style)
+        logger.info("阶段1异步任务开始, taskId=%s, topic=%s, style=%s, enableWebSearch=%s", 
+                    task_id, topic, style, enable_web_search)
         article_agent_service = ArticleAgentService()
         article_service = ArticleService(database)
 
@@ -36,6 +38,11 @@ class ArticleAsyncService:
             state.task_id = task_id
             state.topic = topic
             state.style = style
+            state.enable_web_search = enable_web_search
+
+            # 第 11 期：如果启用联网搜索，先执行搜索
+            if enable_web_search:
+                await self._prepare_web_search_context(task_id, topic, style, article_agent_service, article_service, state)
 
             await article_agent_service.execute_phase1_generate_titles(
                 state,
@@ -70,6 +77,48 @@ class ArticleAsyncService:
             )
             sse_emitter_manager.complete(task_id)
 
+    async def _prepare_web_search_context(
+        self,
+        task_id: str,
+        topic: str,
+        style: Optional[str],
+        article_agent_service: ArticleAgentService,
+        article_service: ArticleService,
+        state: ArticleState,
+    ):
+        """准备 Web 搜索上下文（第 11 期新增）"""
+        from app.services.tavily_search_service import tavily_search_service
+        
+        try:
+            logger.info("开始生成搜索查询, taskId=%s", task_id)
+            
+            # 1. 使用 LLM 生成搜索 query
+            search_queries = await article_agent_service.generate_search_queries(topic, style)
+            
+            if not search_queries:
+                # 查询生成失败，降级为使用 topic 作为唯一 query
+                logger.warning("搜索查询生成失败，降级为使用 topic 作为查询, taskId=%s", task_id)
+                search_queries = [{"type": "general", "query": topic}]
+            
+            logger.info("生成搜索查询成功, taskId=%s, queryCount=%d", task_id, len(search_queries))
+            
+            # 2. 执行搜索
+            search_data = await tavily_search_service.search(search_queries)
+            
+            # 3. 保存搜索上下文到数据库
+            if search_data.get("results"):
+                state.web_search_context = search_data
+                await article_service.save_web_search_context(task_id, search_data)
+                logger.info("搜索完成并保存上下文, taskId=%s, resultsCount=%d", 
+                           task_id, len(search_data.get("results", [])))
+            else:
+                logger.info("搜索未返回结果, taskId=%s", task_id)
+                
+        except Exception as e:
+            logger.error("Web 搜索上下文准备失败，降级为普通生成, taskId=%s, error=%s", task_id, e)
+            # 搜索失败不影响创作流程
+            state.enable_web_search = False
+
     async def execute_phase2(self, task_id: str):
         """阶段2：异步生成大纲"""
         logger.info("阶段2异步任务开始, taskId=%s", task_id)
@@ -80,15 +129,23 @@ class ArticleAsyncService:
             article = await article_service.get_by_task_id(task_id)
             if not article:
                 raise RuntimeError("文章不存在")
+            article_dict = dict(article)
 
             state = ArticleState()
             state.task_id = task_id
-            state.style = article["style"]
-            state.user_description = article["userDescription"]
+            state.style = article_dict["style"]
+            state.user_description = article_dict["userDescription"]
             state.title = TitleResult(
-                mainTitle=article["mainTitle"],
-                subTitle=article["subTitle"],
+                mainTitle=article_dict["mainTitle"],
+                subTitle=article_dict["subTitle"],
             )
+            # 第 11 期：恢复 Web 搜索上下文
+            state.enable_web_search = bool(article_dict.get("enableWebSearch"))
+            if article_dict.get("webSearchContext"):
+                try:
+                    state.web_search_context = json.loads(article_dict["webSearchContext"])
+                except json.JSONDecodeError:
+                    state.web_search_context = None
 
             await article_agent_service.execute_phase2_generate_outline(
                 state,
@@ -123,23 +180,31 @@ class ArticleAsyncService:
             article = await article_service.get_by_task_id(task_id)
             if not article:
                 raise RuntimeError("文章不存在")
+            article_dict = dict(article)
 
-            outline_data = json.loads(article["outline"]) if article["outline"] else []
+            outline_data = json.loads(article_dict["outline"]) if article_dict["outline"] else []
             state = ArticleState()
             state.task_id = task_id
-            state.style = article["style"]
+            state.style = article_dict["style"]
             state.enabled_image_methods = (
-                json.loads(article["enabledImageMethods"])
-                if article["enabledImageMethods"]
+                json.loads(article_dict["enabledImageMethods"])
+                if article_dict["enabledImageMethods"]
                 else None
             )
             state.title = TitleResult(
-                mainTitle=article["mainTitle"],
-                subTitle=article["subTitle"],
+                mainTitle=article_dict["mainTitle"],
+                subTitle=article_dict["subTitle"],
             )
             state.outline = OutlineResult(
                 sections=[OutlineSection(**item) for item in outline_data]
             )
+            # 第 11 期：恢复 Web 搜索上下文
+            state.enable_web_search = bool(article_dict.get("enableWebSearch"))
+            if article_dict.get("webSearchContext"):
+                try:
+                    state.web_search_context = json.loads(article_dict["webSearchContext"])
+                except json.JSONDecodeError:
+                    state.web_search_context = None
 
             await article_agent_service.execute_phase3_generate_content(
                 state,

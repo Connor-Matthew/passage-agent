@@ -2,6 +2,7 @@
 
 from typing import Optional, List, Any
 from pydantic import BaseModel, Field
+import json
 
 from app.schemas.common import PageRequest
 
@@ -16,6 +17,14 @@ class ArticleCreateRequest(BaseModel):
         alias="enabledImageMethods",
         description="允许的配图方式列表（为空表示支持所有方式）"
     )
+    enable_web_search: Optional[bool] = Field(
+        False,
+        alias="enableWebSearch",
+        description="是否启用联网搜索"
+    )
+
+    class Config:
+        populate_by_name = True
 
 
 class ArticleQueryRequest(PageRequest):
@@ -61,6 +70,8 @@ class ArticleVO(BaseModel):
     create_time: str = Field(..., alias="createTime")
     completed_time: Optional[str] = Field(None, alias="completedTime")
     update_time: str = Field(..., alias="updateTime")
+    enable_web_search: Optional[bool] = Field(None, alias="enableWebSearch")
+    web_search_context: Optional[str] = Field(None, alias="webSearchContext")
     
     class Config:
         populate_by_name = True
@@ -149,6 +160,26 @@ class ArticleState:
         self.images: Optional[List[ImageResult]] = None
         self.cover_image: Optional[str] = None
         self.full_content: Optional[str] = None
+        # 第 11 期：Web 搜索
+        self.enable_web_search: bool = False
+        self.web_search_context: Optional[dict] = None
+
+
+class WebSearchResult(BaseModel):
+    """搜索结果项"""
+    
+    title: str
+    url: str
+    content: str
+    queryType: str
+    query: str
+
+
+class WebSearchContextData(BaseModel):
+    """Web 搜索上下文数据"""
+    
+    queries: List[dict]  # 查询列表，包含 type 和 query
+    results: List[dict]  # 搜索结果列表
 
 
 class ArticleConfirmTitleRequest(BaseModel):
