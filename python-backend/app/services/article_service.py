@@ -286,8 +286,7 @@ class ArticleService:
                 UPDATE article
                 SET mainTitle = :mainTitle,
                     subTitle = :subTitle,
-                    userDescription = :userDescription,
-                    phase = :phase
+                    userDescription = :userDescription
                 WHERE taskId = :taskId
             """,
             values={
@@ -295,7 +294,6 @@ class ArticleService:
                 "mainTitle": selected_main_title,
                 "subTitle": selected_sub_title,
                 "userDescription": user_description,
-                "phase": ArticlePhaseEnum.OUTLINE_GENERATING.value,
             },
         )
 
@@ -318,14 +316,12 @@ class ArticleService:
         await self.db.execute(
             query="""
                 UPDATE article
-                SET outline = :outline,
-                    phase = :phase
+                SET outline = :outline
                 WHERE taskId = :taskId
             """,
             values={
                 "taskId": task_id,
                 "outline": json.dumps([item.model_dump() for item in outline], ensure_ascii=False),
-                "phase": ArticlePhaseEnum.CONTENT_GENERATING.value,
             },
         )
 

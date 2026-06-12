@@ -17,6 +17,7 @@ from app.routers import (
 )
 from app.exceptions import BusinessException, ErrorCode
 from app.utils.session import init_redis, close_redis
+from app.services.article_task_queue import article_task_queue_manager
 
 
 @asynccontextmanager
@@ -25,12 +26,24 @@ async def lifespan(app: FastAPI):
     # 启动时执行
     await database.connect()
     await init_redis()
+    if settings.article_task_worker_enabled:
+        await article_task_queue_manager.start()
     print(f"数据库连接成功: {settings.database_url}")
     print(f"Redis 连接成功: {settings.redis_url}")
+    if settings.article_task_worker_enabled:
+        print(
+            "文章任务队列启动成功: "
+            f"maxSize={settings.article_task_queue_max_size}, "
+            f"workerConcurrency={settings.article_task_worker_concurrency}"
+        )
+    else:
+        print("文章任务队列消费已关闭，当前进程仅负责入队")
     
     yield
     
     # 关闭时执行
+    if settings.article_task_worker_enabled:
+        await article_task_queue_manager.stop()
     await database.disconnect()
     await close_redis()
     print("应用已关闭")
@@ -73,7 +86,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     """全局异常处理"""
     print(f"未处理的异常: {exc}")
     return JSONResponse(
-        status_code=200,
+        status_code=500,
         content={
             "code": ErrorCode.SYSTEM_ERROR.code,
             "data": None,

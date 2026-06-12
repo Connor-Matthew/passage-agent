@@ -1,6 +1,5 @@
 """文章路由"""
 
-import asyncio
 from fastapi import APIRouter, Depends
 from databases import Database
 
@@ -16,10 +15,10 @@ from app.schemas.article import (
 )
 from app.schemas.user import LoginUserVO
 from app.services.article_service import ArticleService
-from app.services.article_async_service import article_async_service
 from app.services.agent_log_service import AgentLogService
+from app.services.article_task_queue import article_task_queue_manager
 from app.schemas.statistics import AgentExecutionStatsVO
-from app.deps import require_login
+from app.deps import require_admin, require_login
 from app.managers.sse_manager import sse_emitter_manager
 from app.exceptions import ErrorCode, throw_if
 
@@ -50,19 +49,14 @@ async def create_article(
         request.enable_web_search,  # 第 11 期新增
     )
     
-    # 异步执行阶段1：生成标题方案
-    # 没有await 后台不必等待这个任务，就可以直接返回后面的 task id
-    asyncio.create_task(
-        
-        article_async_service.execute_phase1(
-            task_id,
-            request.topic,
-            request.style,
-            request.enable_web_search,  # 第 11 期新增
-        )
+    await article_task_queue_manager.enqueue_phase1(
+        task_id,
+        request.topic,
+        request.style,
+        request.enable_web_search,  # 第 11 期新增
     )
     
-    return BaseResponse.success(data=task_id, message="任务创建成功")
+    return BaseResponse.success(data=task_id, message="任务已入队")
 
 # sse连接
 @router.get("/progress/{task_id}")
@@ -84,6 +78,15 @@ async def get_progress(
     
     # 创建 SSE Emitter
     return sse_emitter_manager.create_emitter(task_id)
+
+
+@router.get("/queue/stats", response_model=BaseResponse[dict])
+async def get_queue_stats(
+    current_user: LoginUserVO = Depends(require_admin)
+):
+    """获取文章任务队列状态（仅管理员）"""
+    stats = await article_task_queue_manager.get_stats()
+    return BaseResponse.success(data=stats)
 
 
 @router.get("/{task_id}", response_model=BaseResponse[ArticleVO])
@@ -153,8 +156,8 @@ async def confirm_title(
         user_description=request.user_description,
         login_user=current_user,
     )
-    asyncio.create_task(article_async_service.execute_phase2(request.task_id))
-    return BaseResponse.success(data=None)
+    await article_task_queue_manager.enqueue_phase2(request.task_id)
+    return BaseResponse.success(data=None, message="任务已入队")
 
 
 @router.post("/confirm-outline", response_model=BaseResponse[None])
@@ -170,8 +173,8 @@ async def confirm_outline(
         outline=request.outline,
         login_user=current_user,
     )
-    asyncio.create_task(article_async_service.execute_phase3(request.task_id))
-    return BaseResponse.success(data=None)
+    await article_task_queue_manager.enqueue_phase3(request.task_id)
+    return BaseResponse.success(data=None, message="任务已入队")
 
 
 @router.post("/ai-modify-outline", response_model=BaseResponse[list])
