@@ -57,7 +57,7 @@ services:
 
   backend:
     build:
-      context: .
+      context: ./python-backend
       dockerfile: Dockerfile
     image: ai-passage-creator-python:latest
     container_name: ai-passage-backend
@@ -77,6 +77,10 @@ services:
       REDIS_PORT: 6379
       REDIS_DB: 0
       REDIS_PASSWORD: ${REDIS_PASSWORD:-redis123}
+
+      ARTICLE_TASK_QUEUE_KEY: ${ARTICLE_TASK_QUEUE_KEY:-article:task_queue}
+      ARTICLE_TASK_QUEUE_MAX_SIZE: ${ARTICLE_TASK_QUEUE_MAX_SIZE:-1000}
+      ARTICLE_TASK_WORKER_CONCURRENCY: ${ARTICLE_TASK_WORKER_CONCURRENCY:-10}
 
       SESSION_SECRET_KEY: ${SESSION_SECRET_KEY:-change-me-in-production}
       SESSION_MAX_AGE: ${SESSION_MAX_AGE:-2592000}

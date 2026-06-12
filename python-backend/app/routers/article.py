@@ -1,6 +1,5 @@
 """文章路由"""
 
-import asyncio
 from fastapi import APIRouter, Depends
 from databases import Database
 
@@ -16,12 +15,13 @@ from app.schemas.article import (
 )
 from app.schemas.user import LoginUserVO
 from app.services.article_service import ArticleService
-from app.services.article_async_service import article_async_service
 from app.services.agent_log_service import AgentLogService
+from app.services.article_task_queue import article_task_queue_manager
 from app.schemas.statistics import AgentExecutionStatsVO
+from app.models.enums import ArticleStatusEnum
 from app.deps import require_login
 from app.managers.sse_manager import sse_emitter_manager
-from app.exceptions import ErrorCode, throw_if
+from app.exceptions import BusinessException, ErrorCode, throw_if
 
 router = APIRouter(prefix="/article", tags=["文章管理"])
 
@@ -40,6 +40,7 @@ async def create_article(
     )
     
     service = ArticleService(db)
+    await article_task_queue_manager.ensure_has_capacity()
     
     # 检查并消耗配额 + 创建文章任务（在同一事务中）
     task_id = await service.create_article_task_with_quota_check(
@@ -50,19 +51,18 @@ async def create_article(
         request.enable_web_search,  # 第 11 期新增
     )
     
-    # 异步执行阶段1：生成标题方案
-    # 没有await 后台不必等待这个任务，就可以直接返回后面的 task id
-    asyncio.create_task(
-        
-        article_async_service.execute_phase1(
+    try:
+        await article_task_queue_manager.enqueue_phase1(
             task_id,
             request.topic,
             request.style,
             request.enable_web_search,  # 第 11 期新增
         )
-    )
+    except BusinessException as exc:
+        await service.mark_task_failed_and_refund_quota(task_id, current_user, exc.message)
+        raise
     
-    return BaseResponse.success(data=task_id, message="任务创建成功")
+    return BaseResponse.success(data=task_id, message="任务已入队")
 
 # sse连接
 @router.get("/progress/{task_id}")
@@ -84,6 +84,15 @@ async def get_progress(
     
     # 创建 SSE Emitter
     return sse_emitter_manager.create_emitter(task_id)
+
+
+@router.get("/queue/stats", response_model=BaseResponse[dict])
+async def get_queue_stats(
+    current_user: LoginUserVO = Depends(require_login)
+):
+    """获取文章任务队列状态"""
+    stats = await article_task_queue_manager.get_stats()
+    return BaseResponse.success(data=stats)
 
 
 @router.get("/{task_id}", response_model=BaseResponse[ArticleVO])
@@ -146,6 +155,7 @@ async def confirm_title(
 ):
     """确认标题并输入补充描述"""
     service = ArticleService(db)
+    await article_task_queue_manager.ensure_has_capacity()
     await service.confirm_title(
         task_id=request.task_id,
         selected_main_title=request.selected_main_title,
@@ -153,8 +163,12 @@ async def confirm_title(
         user_description=request.user_description,
         login_user=current_user,
     )
-    asyncio.create_task(article_async_service.execute_phase2(request.task_id))
-    return BaseResponse.success(data=None)
+    try:
+        await article_task_queue_manager.enqueue_phase2(request.task_id)
+    except BusinessException as exc:
+        await service.update_article_status(request.task_id, ArticleStatusEnum.FAILED, exc.message)
+        raise
+    return BaseResponse.success(data=None, message="任务已入队")
 
 
 @router.post("/confirm-outline", response_model=BaseResponse[None])
@@ -165,13 +179,18 @@ async def confirm_outline(
 ):
     """确认大纲"""
     service = ArticleService(db)
+    await article_task_queue_manager.ensure_has_capacity()
     await service.confirm_outline(
         task_id=request.task_id,
         outline=request.outline,
         login_user=current_user,
     )
-    asyncio.create_task(article_async_service.execute_phase3(request.task_id))
-    return BaseResponse.success(data=None)
+    try:
+        await article_task_queue_manager.enqueue_phase3(request.task_id)
+    except BusinessException as exc:
+        await service.update_article_status(request.task_id, ArticleStatusEnum.FAILED, exc.message)
+        raise
+    return BaseResponse.success(data=None, message="任务已入队")
 
 
 @router.post("/ai-modify-outline", response_model=BaseResponse[list])

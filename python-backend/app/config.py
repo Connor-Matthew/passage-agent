@@ -98,6 +98,11 @@ class Settings(BaseSettings):
     agent_image_max_concurrency: int = 3
     agent_image_fail_fast: bool = True
 
+    # 文章任务队列配置：最多 1000 个任务排队，后台最多 10 个任务并发执行
+    article_task_queue_key: str = "article:task_queue"
+    article_task_queue_max_size: int = 1000
+    article_task_worker_concurrency: int = 10
+
     # 第 11 期：Tavily Web 搜索配置
     tavily_api_key: str = ""
     tavily_enabled: bool = False

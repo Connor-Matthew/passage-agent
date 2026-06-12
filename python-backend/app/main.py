@@ -17,6 +17,7 @@ from app.routers import (
 )
 from app.exceptions import BusinessException, ErrorCode
 from app.utils.session import init_redis, close_redis
+from app.services.article_task_queue import article_task_queue_manager
 
 
 @asynccontextmanager
@@ -25,12 +26,19 @@ async def lifespan(app: FastAPI):
     # 启动时执行
     await database.connect()
     await init_redis()
+    await article_task_queue_manager.start()
     print(f"数据库连接成功: {settings.database_url}")
     print(f"Redis 连接成功: {settings.redis_url}")
+    print(
+        "文章任务队列启动成功: "
+        f"maxSize={settings.article_task_queue_max_size}, "
+        f"workerConcurrency={settings.article_task_worker_concurrency}"
+    )
     
     yield
     
     # 关闭时执行
+    await article_task_queue_manager.stop()
     await database.disconnect()
     await close_redis()
     print("应用已关闭")

@@ -133,6 +133,38 @@ class ArticleService:
                 enable_web_search=enable_web_search,
             )
 
+    async def mark_task_failed_and_refund_quota(
+        self,
+        task_id: str,
+        login_user: LoginUserVO,
+        error_message: str,
+    ):
+        """队列入队失败时标记任务失败，并归还非 VIP 用户配额。"""
+        async with self.db.transaction():
+            await self.db.execute(
+                query="""
+                    UPDATE article
+                    SET status = :status, errorMessage = :errorMessage
+                    WHERE taskId = :taskId AND userId = :userId AND isDelete = 0
+                """,
+                values={
+                    "status": ArticleStatusEnum.FAILED.value,
+                    "errorMessage": error_message,
+                    "taskId": task_id,
+                    "userId": login_user.id,
+                },
+            )
+
+            if not self._is_vip_or_admin(login_user):
+                await self.db.execute(
+                    query="""
+                        UPDATE user
+                        SET quota = quota + 1
+                        WHERE id = :userId AND isDelete = 0
+                    """,
+                    values={"userId": login_user.id},
+                )
+
     async def get_by_task_id(self, task_id: str):
         """根据任务 ID 查询文章记录"""
         query = select(Article).where(and_(Article.task_id == task_id, Article.is_delete == 0))
