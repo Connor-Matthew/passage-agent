@@ -3,9 +3,10 @@
 import asyncio
 import json
 import logging
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, Optional
 
 from redis.asyncio import Redis
+from redis.exceptions import ResponseError
 
 from app.config import settings
 from app.exceptions import BusinessException, ErrorCode
@@ -16,18 +17,12 @@ logger = logging.getLogger(__name__)
 
 
 class ArticleTaskQueueManager:
-    """Bounded article task queue.
-
-    The queue accepts up to ``article_task_queue_max_size`` pending jobs and
-    starts ``article_task_worker_concurrency`` worker loops in the current
-    worker process. This keeps article generation from creating unbounded
-    background tasks.
-    """
+    """Minimal Redis queue for article phase jobs."""
 
     _ENQUEUE_SCRIPT = """
     local length = redis.call('LLEN', KEYS[1])
     if tonumber(length) >= tonumber(ARGV[2]) then
-        return 0
+        return redis.error_reply('任务队列已满（最多排队 ' .. ARGV[2] .. ' 个），请稍后再试')
     end
     redis.call('RPUSH', KEYS[1], ARGV[1])
     return 1
@@ -35,11 +30,9 @@ class ArticleTaskQueueManager:
 
     def __init__(self):
         self.queue_key = settings.article_task_queue_key
-        self.active_key = f"{self.queue_key}:active"
         self.max_size = max(1, settings.article_task_queue_max_size)
         self.worker_concurrency = max(1, settings.article_task_worker_concurrency)
         self._workers: list[asyncio.Task] = []
-        self._active_task_ids: Set[str] = set()
 
     async def start(self):
         """Start queue consumers if they are not already running."""
@@ -70,7 +63,6 @@ class ArticleTaskQueueManager:
             worker.cancel()
         await asyncio.gather(*self._workers, return_exceptions=True)
         self._workers.clear()
-        self._active_task_ids.clear()
         logger.info("Article task queue stopped")
 
     async def enqueue_phase1(
@@ -97,44 +89,34 @@ class ArticleTaskQueueManager:
         """Queue phase 3 content and image generation."""
         await self._enqueue({"phase": "phase3", "taskId": task_id})
 
-    async def ensure_has_capacity(self):
-        """Fail fast when the backlog is already full."""
-        stats = await self.get_stats()
-        if stats["pending"] >= self.max_size:
-            raise BusinessException(
-                ErrorCode.OPERATION_ERROR,
-                f"任务队列已满（最多排队 {self.max_size} 个），请稍后再试",
-            )
-
     async def get_stats(self) -> Dict[str, Any]:
         """Return queue depth and worker state for diagnostics."""
         client = self._get_client()
         pending = await client.llen(self.queue_key)
-        active = await client.scard(self.active_key)
         return {
             "queueKey": self.queue_key,
             "pending": pending,
             "maxSize": self.max_size,
             "workerConcurrency": self.worker_concurrency,
             "workersRunning": len(self._workers),
-            "active": active,
         }
 
     async def _enqueue(self, payload: Dict[str, Any]):
         client = self._get_client()
         payload_json = json.dumps(payload, ensure_ascii=False)
-        queued = await client.eval(
-            self._ENQUEUE_SCRIPT,
-            1,
-            self.queue_key,
-            payload_json,
-            self.max_size,
-        )
-        if int(queued) != 1:
+        try:
+            await client.eval(
+                self._ENQUEUE_SCRIPT,
+                1,
+                self.queue_key,
+                payload_json,
+                self.max_size,
+            )
+        except ResponseError as exc:
             raise BusinessException(
                 ErrorCode.OPERATION_ERROR,
                 f"任务队列已满（最多排队 {self.max_size} 个），请稍后再试",
-            )
+            ) from exc
         logger.info(
             "Article task queued, taskId=%s, phase=%s",
             payload.get("taskId"),
@@ -168,9 +150,6 @@ class ArticleTaskQueueManager:
             logger.error("Article task payload missing taskId, payload=%s", payload)
             return
 
-        client = self._get_client()
-        self._active_task_ids.add(task_id)
-        await client.sadd(self.active_key, task_id)
         logger.info(
             "Article task started, workerId=%s, taskId=%s, phase=%s",
             worker_id,
@@ -192,8 +171,6 @@ class ArticleTaskQueueManager:
             else:
                 logger.error("Unknown article task phase, taskId=%s, phase=%s", task_id, phase)
         finally:
-            self._active_task_ids.discard(task_id)
-            await client.srem(self.active_key, task_id)
             logger.info(
                 "Article task finished, workerId=%s, taskId=%s, phase=%s",
                 worker_id,

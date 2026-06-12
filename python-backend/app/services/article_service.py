@@ -133,38 +133,6 @@ class ArticleService:
                 enable_web_search=enable_web_search,
             )
 
-    async def mark_task_failed_and_refund_quota(
-        self,
-        task_id: str,
-        login_user: LoginUserVO,
-        error_message: str,
-    ):
-        """队列入队失败时标记任务失败，并归还非 VIP 用户配额。"""
-        async with self.db.transaction():
-            await self.db.execute(
-                query="""
-                    UPDATE article
-                    SET status = :status, errorMessage = :errorMessage
-                    WHERE taskId = :taskId AND userId = :userId AND isDelete = 0
-                """,
-                values={
-                    "status": ArticleStatusEnum.FAILED.value,
-                    "errorMessage": error_message,
-                    "taskId": task_id,
-                    "userId": login_user.id,
-                },
-            )
-
-            if not self._is_vip_or_admin(login_user):
-                await self.db.execute(
-                    query="""
-                        UPDATE user
-                        SET quota = quota + 1
-                        WHERE id = :userId AND isDelete = 0
-                    """,
-                    values={"userId": login_user.id},
-                )
-
     async def get_by_task_id(self, task_id: str):
         """根据任务 ID 查询文章记录"""
         query = select(Article).where(and_(Article.task_id == task_id, Article.is_delete == 0))
@@ -282,13 +250,6 @@ class ArticleService:
             values={"phase": phase.value, "taskId": task_id},
         )
 
-    async def set_phase_for_queue_retry(self, task_id: str, phase: ArticlePhaseEnum):
-        """入队失败后回退阶段，让用户稍后可重试下一阶段。"""
-        await self.db.execute(
-            query="UPDATE article SET phase = :phase WHERE taskId = :taskId AND isDelete = 0",
-            values={"phase": phase.value, "taskId": task_id},
-        )
-
     async def save_title_options(self, task_id: str, title_options: List[TitleOption]):
         """保存标题方案列表"""
         await self.db.execute(
@@ -325,8 +286,7 @@ class ArticleService:
                 UPDATE article
                 SET mainTitle = :mainTitle,
                     subTitle = :subTitle,
-                    userDescription = :userDescription,
-                    phase = :phase
+                    userDescription = :userDescription
                 WHERE taskId = :taskId
             """,
             values={
@@ -334,7 +294,6 @@ class ArticleService:
                 "mainTitle": selected_main_title,
                 "subTitle": selected_sub_title,
                 "userDescription": user_description,
-                "phase": ArticlePhaseEnum.OUTLINE_GENERATING.value,
             },
         )
 
@@ -357,14 +316,12 @@ class ArticleService:
         await self.db.execute(
             query="""
                 UPDATE article
-                SET outline = :outline,
-                    phase = :phase
+                SET outline = :outline
                 WHERE taskId = :taskId
             """,
             values={
                 "taskId": task_id,
                 "outline": json.dumps([item.model_dump() for item in outline], ensure_ascii=False),
-                "phase": ArticlePhaseEnum.CONTENT_GENERATING.value,
             },
         )
 

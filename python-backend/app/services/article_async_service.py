@@ -130,6 +130,7 @@ class ArticleAsyncService:
             if not article:
                 raise RuntimeError("文章不存在")
             article_dict = dict(article)
+            await article_service.update_phase(task_id, ArticlePhaseEnum.OUTLINE_GENERATING)
 
             state = ArticleState()
             state.task_id = task_id
@@ -181,6 +182,7 @@ class ArticleAsyncService:
             if not article:
                 raise RuntimeError("文章不存在")
             article_dict = dict(article)
+            await article_service.update_phase(task_id, ArticlePhaseEnum.CONTENT_GENERATING)
 
             outline_data = json.loads(article_dict["outline"]) if article_dict["outline"] else []
             state = ArticleState()

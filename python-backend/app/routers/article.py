@@ -18,10 +18,9 @@ from app.services.article_service import ArticleService
 from app.services.agent_log_service import AgentLogService
 from app.services.article_task_queue import article_task_queue_manager
 from app.schemas.statistics import AgentExecutionStatsVO
-from app.models.enums import ArticlePhaseEnum
 from app.deps import require_admin, require_login
 from app.managers.sse_manager import sse_emitter_manager
-from app.exceptions import BusinessException, ErrorCode, throw_if
+from app.exceptions import ErrorCode, throw_if
 
 router = APIRouter(prefix="/article", tags=["文章管理"])
 
@@ -40,7 +39,6 @@ async def create_article(
     )
     
     service = ArticleService(db)
-    await article_task_queue_manager.ensure_has_capacity()
     
     # 检查并消耗配额 + 创建文章任务（在同一事务中）
     task_id = await service.create_article_task_with_quota_check(
@@ -51,16 +49,12 @@ async def create_article(
         request.enable_web_search,  # 第 11 期新增
     )
     
-    try:
-        await article_task_queue_manager.enqueue_phase1(
-            task_id,
-            request.topic,
-            request.style,
-            request.enable_web_search,  # 第 11 期新增
-        )
-    except BusinessException as exc:
-        await service.mark_task_failed_and_refund_quota(task_id, current_user, exc.message)
-        raise
+    await article_task_queue_manager.enqueue_phase1(
+        task_id,
+        request.topic,
+        request.style,
+        request.enable_web_search,  # 第 11 期新增
+    )
     
     return BaseResponse.success(data=task_id, message="任务已入队")
 
@@ -155,7 +149,6 @@ async def confirm_title(
 ):
     """确认标题并输入补充描述"""
     service = ArticleService(db)
-    await article_task_queue_manager.ensure_has_capacity()
     await service.confirm_title(
         task_id=request.task_id,
         selected_main_title=request.selected_main_title,
@@ -163,11 +156,7 @@ async def confirm_title(
         user_description=request.user_description,
         login_user=current_user,
     )
-    try:
-        await article_task_queue_manager.enqueue_phase2(request.task_id)
-    except BusinessException:
-        await service.set_phase_for_queue_retry(request.task_id, ArticlePhaseEnum.TITLE_SELECTING)
-        raise
+    await article_task_queue_manager.enqueue_phase2(request.task_id)
     return BaseResponse.success(data=None, message="任务已入队")
 
 
@@ -179,17 +168,12 @@ async def confirm_outline(
 ):
     """确认大纲"""
     service = ArticleService(db)
-    await article_task_queue_manager.ensure_has_capacity()
     await service.confirm_outline(
         task_id=request.task_id,
         outline=request.outline,
         login_user=current_user,
     )
-    try:
-        await article_task_queue_manager.enqueue_phase3(request.task_id)
-    except BusinessException:
-        await service.set_phase_for_queue_retry(request.task_id, ArticlePhaseEnum.OUTLINE_EDITING)
-        raise
+    await article_task_queue_manager.enqueue_phase3(request.task_id)
     return BaseResponse.success(data=None, message="任务已入队")
 
 

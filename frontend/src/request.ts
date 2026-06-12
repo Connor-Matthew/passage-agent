@@ -41,7 +41,11 @@ myAxios.interceptors.response.use(
   },
   function (error) {
     // Any status codes that falls outside the range of 2xx cause this function to trigger
-    // Do something with response error
+    // 把后端业务消息合并到原始 axios 错误上，保留 response / config 等字段供调用方使用
+    const serverMessage = error.response?.data?.message || error.response?.data?.detail
+    if (serverMessage) {
+      error.message = serverMessage
+    }
     return Promise.reject(error)
   },
 )
