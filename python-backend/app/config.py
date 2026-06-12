@@ -102,6 +102,7 @@ class Settings(BaseSettings):
     article_task_queue_key: str = "article:task_queue"
     article_task_queue_max_size: int = 1000
     article_task_worker_concurrency: int = 10
+    article_task_worker_enabled: bool = False
 
     # 第 11 期：Tavily Web 搜索配置
     tavily_api_key: str = ""

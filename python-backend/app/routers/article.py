@@ -18,8 +18,8 @@ from app.services.article_service import ArticleService
 from app.services.agent_log_service import AgentLogService
 from app.services.article_task_queue import article_task_queue_manager
 from app.schemas.statistics import AgentExecutionStatsVO
-from app.models.enums import ArticleStatusEnum
-from app.deps import require_login
+from app.models.enums import ArticlePhaseEnum
+from app.deps import require_admin, require_login
 from app.managers.sse_manager import sse_emitter_manager
 from app.exceptions import BusinessException, ErrorCode, throw_if
 
@@ -88,9 +88,9 @@ async def get_progress(
 
 @router.get("/queue/stats", response_model=BaseResponse[dict])
 async def get_queue_stats(
-    current_user: LoginUserVO = Depends(require_login)
+    current_user: LoginUserVO = Depends(require_admin)
 ):
-    """获取文章任务队列状态"""
+    """获取文章任务队列状态（仅管理员）"""
     stats = await article_task_queue_manager.get_stats()
     return BaseResponse.success(data=stats)
 
@@ -165,8 +165,8 @@ async def confirm_title(
     )
     try:
         await article_task_queue_manager.enqueue_phase2(request.task_id)
-    except BusinessException as exc:
-        await service.update_article_status(request.task_id, ArticleStatusEnum.FAILED, exc.message)
+    except BusinessException:
+        await service.set_phase_for_queue_retry(request.task_id, ArticlePhaseEnum.TITLE_SELECTING)
         raise
     return BaseResponse.success(data=None, message="任务已入队")
 
@@ -187,8 +187,8 @@ async def confirm_outline(
     )
     try:
         await article_task_queue_manager.enqueue_phase3(request.task_id)
-    except BusinessException as exc:
-        await service.update_article_status(request.task_id, ArticleStatusEnum.FAILED, exc.message)
+    except BusinessException:
+        await service.set_phase_for_queue_retry(request.task_id, ArticlePhaseEnum.OUTLINE_EDITING)
         raise
     return BaseResponse.success(data=None, message="任务已入队")
 

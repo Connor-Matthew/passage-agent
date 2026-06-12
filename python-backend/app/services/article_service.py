@@ -282,6 +282,13 @@ class ArticleService:
             values={"phase": phase.value, "taskId": task_id},
         )
 
+    async def set_phase_for_queue_retry(self, task_id: str, phase: ArticlePhaseEnum):
+        """入队失败后回退阶段，让用户稍后可重试下一阶段。"""
+        await self.db.execute(
+            query="UPDATE article SET phase = :phase WHERE taskId = :taskId AND isDelete = 0",
+            values={"phase": phase.value, "taskId": task_id},
+        )
+
     async def save_title_options(self, task_id: str, title_options: List[TitleOption]):
         """保存标题方案列表"""
         await self.db.execute(

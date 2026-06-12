@@ -19,8 +19,9 @@ class ArticleTaskQueueManager:
     """Bounded article task queue.
 
     The queue accepts up to ``article_task_queue_max_size`` pending jobs and
-    starts ``article_task_worker_concurrency`` worker loops in the API process.
-    This keeps article generation from creating unbounded background tasks.
+    starts ``article_task_worker_concurrency`` worker loops in the current
+    worker process. This keeps article generation from creating unbounded
+    background tasks.
     """
 
     _ENQUEUE_SCRIPT = """
@@ -34,6 +35,7 @@ class ArticleTaskQueueManager:
 
     def __init__(self):
         self.queue_key = settings.article_task_queue_key
+        self.active_key = f"{self.queue_key}:active"
         self.max_size = max(1, settings.article_task_queue_max_size)
         self.worker_concurrency = max(1, settings.article_task_worker_concurrency)
         self._workers: list[asyncio.Task] = []
@@ -108,14 +110,14 @@ class ArticleTaskQueueManager:
         """Return queue depth and worker state for diagnostics."""
         client = self._get_client()
         pending = await client.llen(self.queue_key)
+        active = await client.scard(self.active_key)
         return {
             "queueKey": self.queue_key,
             "pending": pending,
             "maxSize": self.max_size,
             "workerConcurrency": self.worker_concurrency,
             "workersRunning": len(self._workers),
-            "active": len(self._active_task_ids),
-            "activeTaskIds": sorted(self._active_task_ids),
+            "active": active,
         }
 
     async def _enqueue(self, payload: Dict[str, Any]):
@@ -166,7 +168,9 @@ class ArticleTaskQueueManager:
             logger.error("Article task payload missing taskId, payload=%s", payload)
             return
 
+        client = self._get_client()
         self._active_task_ids.add(task_id)
+        await client.sadd(self.active_key, task_id)
         logger.info(
             "Article task started, workerId=%s, taskId=%s, phase=%s",
             worker_id,
@@ -189,6 +193,7 @@ class ArticleTaskQueueManager:
                 logger.error("Unknown article task phase, taskId=%s, phase=%s", task_id, phase)
         finally:
             self._active_task_ids.discard(task_id)
+            await client.srem(self.active_key, task_id)
             logger.info(
                 "Article task finished, workerId=%s, taskId=%s, phase=%s",
                 worker_id,
