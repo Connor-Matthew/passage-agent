@@ -86,7 +86,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     """全局异常处理"""
     print(f"未处理的异常: {exc}")
     return JSONResponse(
-        status_code=200,
+        status_code=500,
         content={
             "code": ErrorCode.SYSTEM_ERROR.code,
             "data": None,
